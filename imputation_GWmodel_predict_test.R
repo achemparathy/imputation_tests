@@ -5,40 +5,35 @@ library(sp)
 library(spgwr)
 library(dummies)
 
-# Read in data and remove all rows with "NA"s
+completeFun <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+
+# Read in data and 
 data = read.csv("C:/Users/aditi.chemparathy/Documents/NAhouses.csv",header=TRUE)
+
+# Training data - remove all rows with "NA"s
 newdata <- data[complete.cases(data), ]
+
+# Test data - get rows with NAs in dependent variable
+test_data <- data[which(is.na(data$houseValue)), ]
+test_data <- completeFun(test_data, "income")
+test_data <- completeFun(test_data, "population")
+test_data <- completeFun(test_data, "households")
 
 #One-hot encode the categorical variable(s)
 df <- dummy.data.frame(newdata, names=c("houseAge"), sep="_")
-
+df <- newdata
 #Transform data into SpatialPointsDataFrame
 coordinates(df) <- ~longitude+latitude
+coordinates(test_data) <- ~longitude+latitude
 proj4string(df) <- CRS('+proj=longlat +datum=WGS84') #lambert coordinates
+proj4string(test_data) <- CRS('+proj=longlat +datum=WGS84') #lambert coordinates
 
 #Create diagonal distance matrix
 DM_points<-gw.dist(dp.locat=coordinates(df))
-
-#Create Spatial grid
-bb <- bbox(df)
-cs <- c(0.5,0.5) # cell size in lat/long
-cc <- bb[, 1] + (cs/2)  # cell offset
-cd <- ceiling(diff(t(bb))/cs)  # number of cells per direction
-grd <- SpatialGrid(GridTopology(cellcentre.offset=cc, cellsize=cs, cells.dim=cd))
-sp_grd <- SpatialGridDataFrame(grd,
-                               data=data.frame(id=1:prod(cd)),
-                               proj4string=CRS(proj4string(df)))
-
-#Create diagonal distance matrix of grid
-DM_grid<-gw.dist(dp.locat = coordinates(df),rp.locat = coordinates(sp_grd))
-
-#Plot data on top of grid
-library("lattice")
-spplot(sp_grd,
-       panel = function(...) {
-         panel.gridplot(...,border="black")
-         sp.points(df, cex=1.5)
-       })
+DM_predict_dist <- gw.dist(dp.locat=coordinates(df),rp.locat = coordinates(test_data))
 
 # #Calculate optimal BW through CV
 # Sys.time()
@@ -49,24 +44,25 @@ spplot(sp_grd,
 #dependant variable = houseAge_1 
 #independant variable = income + houseValue
 #regression points are at each grid cell
-res.binomial <- ggwr.basic(houseValue~income+population+households
+res <- gwr.predict(houseValue~income+population+households
                            ,bw=20
                            ,adaptive=TRUE
                            ,data=df
-                           ,regression.points=sp_grd
-                           ,dMat=DM_grid
-                           ,dMat1=DM_points
+                           ,predictdata = test_data
+                           ,dMat1=DM_predict_dist
+                           ,dMat2=DM_points
                            ,longlat = TRUE)
-#,family="binomial")
+
 Sys.time()
 
-image(res.binomial$SDF, 'population')
-plot(df, add=TRUE)
+predictions <- as.data.frame(res$SDF$prediction)
+colnames(predictions)[colnames(predictions)=="res$SDF$prediction"] <- "predicted_houseValues"
+test_data_frame <- as.data.frame(test_data)
+results <- cbind(test_data_frame,predictions)
+results <- results[which(results$predicted_houseValues >= 0), ]
+coordinates(results) <- ~longitude+latitude
 
-####Prediction
-
-#Get data with NA houseValue
-test_data <- data[which(is.na(data$houseValue)), ]
-
+plot(as.data.frame(results$predicted_houseValues))
+points(as.data.frame(df$houseValue),col="red")
 
 
